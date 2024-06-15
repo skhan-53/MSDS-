@@ -1,0 +1,472 @@
+---
+title: "IST707 Group Project"
+author: "Sara Cliffel"
+date: "5/31/2022"
+output: 
+  html_document:
+    theme: yeti
+---
+# **Goodreads Books Reviews**   
+  
+**Group 1 Project Update**
+  
+*Set Information:  *  
+*This dataset contains more than 1.3M book reviews about 25,475 books and 18,892 users, which is a review subset for spoiler detection, where each book/user has at least one associated spoiler review*
+  
+  
+### **Data Preparation**  
+    
+Libraries: 
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(rpart)
+library(plyr)
+library(dplyr)
+library(rJava)
+library(RWeka)
+library(cluster)
+library(caret)
+library(e1071)
+library(class)
+library(arules)
+library(quanteda.textplots)
+library(quanteda.textstats)
+library(readr)
+library(quanteda)
+library(arules)
+library(arulesViz)
+library(randomForest)
+```
+  
+  
+Start by importing the test and train data sets. 
+```{r}
+test <- read.csv("C:\\Users\\sarac\\OneDrive\\Documents\\Syracuse\\IST 707 Data Analytics--Applied Machine Learning\\Group Project\\goodreads_test.csv")
+
+train <- read.csv("C:\\Users\\sarac\\OneDrive\\Documents\\Syracuse\\IST 707 Data Analytics--Applied Machine Learning\\Group Project\\goodreads_train.csv")
+```
+  
+  
+Explore the data sets
+```{r}
+#head(test)   #Editing out for the sake of my knit file
+nrow(test)
+ncol(test)
+
+#head(train)    #Editing out for the sake of my knit file
+nrow(train)
+ncol(train)
+```
+The train data set contains 900,000 rows that are labeled with the book's attributes.  
+  -Dimensions: 900,000 x 11    
+The test data set contains 478,033 rows that are labeled with the book's attributes except for it's rating, which was included in the train set.    
+  -Dimensions: 478,033 x 10  
+   
+
+# **Pre-processing** 
+
+
+Because of the massive size of both of these sets they take a long time to process. We will be cutting them each down to only 10% of their original size. 
+For the seed the group ran tests using seed number '123'.
+```{r}
+set.seed(123)
+miniTrain<-sample(nrow(train),nrow(train)*.10)
+miniTrain<-train[miniTrain,]
+
+miniTest<-sample(nrow(test),nrow(test)*.10)
+miniTest<-test[miniTest,]
+```
+*Note:* the new row length for our miniTrain set is 90,000 observations long while our miniTest is 47,803 observations long. This is still a fairly sizable amount of data to be processing. 
+  
+  
+For the purpose of our project we will be dropping the "started_at", "read_at" and the "date_updated" columns
+```{r}
+dropAttributes <- c("started_at", "read_at", "date_updated", "date_added")
+
+miniTest <- select(miniTest, -dropAttributes)      #dpylr package select() to delete columns by name
+miniTrain <- select(miniTrain, -dropAttributes)
+```
+*Note:* We now only have 8 variables for the our miniTrain data set and 7 variable for our miniTest ('rating' is not included in 'miniTest' as it was not in 'Test').  
+Dimensions miniTest: 478,033 x 7  
+Dimensions miniTest: 90,000 x 8  
+  
+  
+Examine the structure of the reduced sets before we continue. 
+```{r}
+#Structure of miniTest
+str(miniTest)
+
+#Structure of miniTrain
+str(miniTrain)
+```
+  
+  
+We need our "rating" attribute to be set as a factor in our miniTrain data set. 
+```{r}
+miniTrain$rating <- as.factor(miniTrain$rating)
+str(miniTrain$rating)
+```
+  
+
+
+
+### **Basic Visualizations**
+
+Histogram of the ratings
+```{r}
+#Because histogram cannot visualize factors we will momentarily switch rating back to numeric. 
+miniTrain$rating <- as.numeric(miniTrain$rating)
+
+hist(miniTrain$rating, main="Histogram of Book Ratings", xlab="Rating", col="lavender")
+
+#Put it back in numeric. 
+miniTrain$rating <- as.factor(miniTrain$rating)
+```
+*Note: We must leave rating as a numeric value for this plot to work. Factor after.*
+
+Create a bar plot displaying the count per rating. 
+```{r}
+ggplot(miniTrain, aes(x=rating, fill=factor(rating))) + geom_bar(width = 1) + ggtitle("Bar Chart of Book Ratings")
+```
+
+
+This might be better expressed as a pie chart. 
+```{r}
+ggplot(miniTrain, aes(x=rating, fill=factor(rating))) + geom_bar(width = 1) + coord_polar() + ggtitle("Pie Chart of Book Ratings")
+```
+
+
+
+
+### **Word Association**
+In this section I am going to attempt to determine if the comment left for the book was posative or negative based off of the words used in it and an already existing list of a thousand positive and negative words.   
+  
+Read in the list of positive words, using the scan() function. Do the same for the the negative words list:
+```{r}
+URL1 <-"https://intro-datascience.s3.us-east-2.amazonaws.com/positive-words.txt"
+URL2 <-"https://intro-datascience.s3.us-east-2.amazonaws.com/negative-words.txt"
+
+#We will call positive words "P"
+P <-scan(URL1, character(0), sep="\n")
+P <- P[-1:-34]
+length(P)
+
+#We will call negative words "N"
+N <-scan(URL2, character(0), sep="\n")
+N <- N[-1:-34]
+length(N)
+
+```
+
+Munge the stop words, punctuation, and set it up to analyze the review text. 
+```{r}
+trainCorpus <- corpus(miniTrain$review_text, docnames= miniTrain$review_id)
+tokens <- tokens(trainCorpus, remove_punct=TRUE)   #Remove punctuation
+tokensNonStopWords <- tokens_select(tokens, pattern = stopwords("en"), selection = "remove")   #remove English stop words
+
+dfDFM <-dfm(tokensNonStopWords)
+```
+
+Word cloud:
+```{r}
+textplot_wordcloud(dfDFM, min_count = 10, min_size = 0.5,max_size = 4, max_words = 500)
+```
+
+```{r}
+library(quanteda.textstats)
+textstat_frequency(dfDFM, n=10)
+```
+
+```{r}
+PDFM <- dfm_match(dfDFM, P)
+PFreq <- textstat_frequency(PDFM)
+nrow(PFreq)
+```
+
+
+
+
+  
+### **K-means Clustering **
+
+Create a subset data frame with only the attributes we want for testing. 
+```{r}
+KTrain <- miniTrain
+KTrain <- select(miniTrain, -"user_id", -"book_id", -"review_id", -"review_text")
+str(KTrain)
+```
+
+Build kmeans model using RWeka
+```{r}
+model_rweka <-  SimpleKMeans(KTrain, control = Weka_control(N=6, I=500, S=100))   #"N" = number of clusters wanted, "I" = number of iterations, "S" = random seed number
+model_rweka
+```
+*Note:* I set the number of clusters to 6 as there are 6 factor levels for the rating attribute.  
+  
+  
+Since it is difficult to interpret and visualize the clustering results with RWeka, we will introduce some built-in R functions, as well as visualization packages.   
+Use the KMeans algorithem in R 
+```{r}
+model_r <- kmeans(KTrain, 6)  #Again, setting the number of cluster to the number of factors
+```
+  
+  
+Examine the centroids. 
+```{r}
+model_r$centers
+```
+
+If you want to see get the individual cluster assignments...
+```{r}
+cluster_assignment <- data.frame(KTrain, model_r$cluster)
+#View(cluster_assignment)
+```
+Note: This creates a new data frame, "Cluster Assignment" that includes a new column that displays what cluster book is in. 
+
+
+Visualize book ratings and clusters.
+```{r}
+plot(KTrain$rating ~ jitter(model_r$cluster, factor=5), pch=19, main="Cluster Model of Books", ylab="Book Rating", xlab="Cluster Assignment")
+#Note: "pch" sets the point symbol 0-25 + other characters. 
+#https://r-lang.com/pch-in-r/#:~:text=The%20pch%20in%20R%20defines,in%20symbols%20(or%20shapes).
+```
+**This seems very incorrect**  
+[Link to "pch" options](https://r-lang.com/pch-in-r/#:~:text=The%20pch%20in%20R%20defines,in%20symbols%20(or%20shapes))  
+  
+  
+Use PCA in visualization package "cluster" to visualize kMeans model. PCA is principal components analysis.   
+```{r}
+clusplot(KTrain, model_r$cluster, color = TRUE, shade = TRUE, labels = 2, lines=0) #plot clusters
+```
+
+
+Use R's HAC algorithm, which uses Euclidean distance and complete linkage by default. plot the dendrogram
+```{r}
+#d = dist(as.matrix(KTrain))
+#hc = hclust(d)
+#plot(hc)
+```
+*Cannot create dendrogram due to the size fo the vector*  
+  
+  
+  
+    
+### **Decision Tree**
+Build a decision tree model. Tune the parameters, such as the pruning options, and report the 3-fold CV accuracy. 
+
+Build the decision tree, apply to miniTrain only for now (20% original data).
+```{r}
+#startTime <- Sys.time()
+#trainTree <- rpart(rating~.,data = miniTrain, method = "class", control = rpart.control(cp=0,xval = 3))
+#predictTrain<-data.frame(predict(trainTree,miniTrain))
+#endTime <- Sys.time()
+#runTime <- endTime - startTime
+#runTime
+```
+
+
+Force it to stop. Get total time ran. 
+```{r}
+#install.packages("lubridate")
+library(lubridate)
+startTime <- hours(1) + minutes(8) + seconds(1)
+forcedEndTime <- hours(15) + minutes(4) + seconds(32)
+failedRunTime <- forcedEndTime - startTime
+failedRunTime
+```
+No go. The trainTree on the miniTrain set has been loading for **14 hours**.  
+Could reduce further but should talk with group. 
+
+  
+  
+  
+  
+### **Naïve Bayes**
+
+Build a Naïve Bayes model. Tune the parameters, such as the discretization options, to compare results. 
+
+
+Build the Naïve Bayes classifier. 
+```{r}
+BayesPrediction <- naiveBayes(as.factor(rating) ~ n_votes + n_comments, data = miniTrain)
+```
+*Note:* I was trying to predict rating based on the number of votes and number of comments a book recived. 
+
+
+Test the results and create a confusion matrix: 
+```{r}
+results <- predict(BayesPrediction, miniTrain, type = c("class"))
+confusionMatrix(results, as.factor(miniTrain$rating))
+```
+**Bad** accuracy man. Wow, really terrible. 
+
+
+Try again using all the data as input. 
+```{r}
+BayesPrediction2 <- naiveBayes(as.factor(rating) ~ ., data = miniTrain)
+
+results2 <- predict(BayesPrediction2, miniTrain, type = c("class"))
+confusionMatrix(results2, as.factor(miniTrain$rating))
+```
+**Much worse...**   
+  
+Let's see if we can't tune it into specific user ID's
+```{r}
+BayesPrediction3 <- naiveBayes(as.factor(rating) ~ user_id, data = miniTrain)
+
+results3 <- predict(BayesPrediction3, miniTrain, type = c("class"))
+confusionMatrix(results3, as.factor(miniTrain$rating))
+```
+Better than the whole lot, not better than the number of votes and comments. 
+
+*Simply Combine them to fix problem*
+```{r}
+BayesPrediction4 <- naiveBayes(as.factor(rating) ~ n_votes + n_comments + user_id, data = miniTrain)
+
+results4 <- predict(BayesPrediction4, miniTrain, type = c("class"))
+confusionMatrix(results4, as.factor(miniTrain$rating))
+```
+Mmm, did not fix problem. Consult with group...  
+
+**Summary:**
+
+* Results 1: n_votes & n_comments  
+    + Accuracy : 0.3449   
+* Results 2: All variables
+    + Accuracy : 5e-04   
+* Results 3: user_id
+    + Accuracy : 0.2637
+* Results 4: n_votes, n_comments, & user_id
+    + Accuracy : 0.2726 
+
+
+## **KNN Model**  
+
+Now we will use the "class" package to run kNN. No missing values are allowed. No nominal values are allowed. Labels should be separated from train and test data.
+``{r}
+`#make Sure there are no NA's`
+`KNNTrain <- na.omit(miniTrain)`
+`KNNTest <- na.omit(miniTest)`
+
+`start_time1 <- Sys.time()`
+`predKNN <- knn(train=KNNTrain, test=KNNTest, cl=miniTrain$rating, k=3)`
+`end_time1 <- Sys.time()`
+
+`myLabels <- c("rating")`
+`myLabelCol <- miniTest[myLabels]`
+`newKNNPred <- cbind(myLabelCol, predKNN)`
+`colnames(newKNNPred) <- c("rating", "predicted")`
+`write.csv(newKNNPred, file="C:\\Users\\sarac\\OneDrive\\Documents\\Syracuse\\IST 707 Data Analytics--Applied Machine Learning\\Group Project\\KNN-Model-FinalProject.csv", row.names=FALSE)`
+
+`runTime1 <- end_time1 - start_time1`
+`runTime1`
+``
+**Error in knn(train = KNNTrain, test = KNNTest, cl = miniTrain$rating, : dims of 'test' and 'train' differ**
+
+
+
+# **SVM**  
+
+Run the SVM Model: 
+
+`library(e1071)`
+`start_time2 <- Sys.time()`
+`svm<- svm(rating~., data = miniTrain)`
+`pred=predict(svm, newdata=miniTest, type=c("class"))`
+`end_time2 <- Sys.time()`
+
+`myLabels <- c("rating")`
+`myLabelCol <- miniTest[myLabels]`
+`newSVMPred <- cbind(myLabelCol, predKNN)`
+`colnames(newSVMPred) <- c("rating", "Predicted")`
+`write.csv(newSVMPred, file="C:\\Users\\sarac\\OneDrive\\Documents\\Syracuse\\IST 707 Data Analytics--Applied Machine Learning\\Group Project\\SVM-ModelFinalProject.csv", row.names=FALSE)`
+
+`runTime2 <- end_time2 - start_time2`
+`runTime2`
+
+**Error: cannot allocate vector of size 60.3 Gb**
+
+
+
+# **Random Forest**  
+
+Run the Random Forest Model. Use 10 trees to start then see if you can produce better results. 
+```{r}
+library(randomForest)
+start_time3 <- Sys.time()
+rf <- randomForest(rating~., data=miniTrain, ntree=2000)
+print(rf)
+predRF <- predict(rf, miniTrain, type=c("class"))
+end_time3 <- Sys.time()
+
+myLabels <- c("rating")
+myLabelCol <- miniTrain[myLabels]
+newRFPred <- cbind(myLabelCol, predRF)
+colnames(newRFPred) <- c("rating", "predicted")
+write.csv(newRFPred, file="C:\\Users\\sarac\\OneDrive\\Documents\\Syracuse\\IST 707 Data Analytics--Applied Machine Learning\\Group Project\\RF-ModelFinalProject.csv", row.names=FALSE)
+
+runTime3 <- end_time3 - start_time3
+runTime3
+```
+**Results:**  
+Our Random Forrest model with **2000 trees** has a relatively high error rate, producing only 37.55% correct matches.  
+Our Random Forrest model with **1000 trees** has a relatively high error rate, producing only 37.48% correct matches.    
+Our Random Forrest model with **500 trees** has a relatively high error rate, producing only 37.42% correct matches.  
+Our Random Forrest model with **100 trees** has a relatively high error rate, producing only 37.16% correct matches.  
+Our Random Forrest model with **50 trees** has a relatively high error rate, producing only 36.61% correct matches.   
+Our Random Forrest model with **15 trees** has a relatively high error rate, producing only 34.62% correct matches.   
+Our Random Forrest model with **10 trees** has a relatively high error rate, producing only 33.33% correct matches.     
+Our Random Forrest model with **5 trees** has a relatively high error rate, producing only 32.92% correct matches.     
+  
+Based off our numerous runs of the Random Forest model we can see that the more trees we include the better the accuracy becomes. That being said our accuracy is still bad. We could try to improve the accuracy by building a model specific to the predictors "n_comments" and "n_votes". 
+
+
+Run the Random Forest Model again, but this time only include "n_comments" and "n_votes". 
+```{r}
+library(randomForest)
+start_time4 <- Sys.time()
+rf2 <- randomForest(rating~ n_comments + n_votes, data=miniTrain, ntree=10)
+print(rf2)
+predRF2 <- predict(rf2, miniTrain, type=c("class"))
+end_time4 <- Sys.time()
+
+myLabels <- c("rating")
+myLabelCol <- miniTrain[myLabels]
+newRFPred2 <- cbind(myLabelCol, predRF2)
+colnames(newRFPred2) <- c("rating", "predicted")
+write.csv(newRFPred2, file="C:\\Users\\sarac\\OneDrive\\Documents\\Syracuse\\IST 707 Data Analytics--Applied Machine Learning\\Group Project\\RF2-ModelFinalProject.csv", row.names=FALSE)
+
+runTime4 <- end_time4 - start_time4  
+  
+runTime4
+```
+**Results:**  
+Our Random Forrest model with **2000 trees** has a relatively high error rate, producing only 35.32% correct matches.  
+Our Random Forrest model with **500 trees** has a relatively high error rate, producing only 35.34% correct matches.  
+Our Random Forrest model with **100 trees** has a relatively high error rate, producing only 35.28% correct matches.  
+Our Random Forrest model with **10 trees** has a relatively high error rate, producing only 35.16% correct matches.  
+  
+Reducing it to only the number of comments and the number of votes didn't help in predicting the rating, in fact it made our overall accuracy lower.   
+
+
+
+# **Linear Regression **  
+For the sake of trying to determine the significance of predictors on a book's overall rating we thought it prudent to run a linear regression model on the data. However, give the size of the vectors and time constraints we will have to reduce the size fo our data even further, to only a tenth of the already reduced size (9000x7). To maintain uniformity we will use the sames seed number, '123', and begin sampling from our already sampled/reduced 'miniTrain' data frame. 
+```{r}
+set.seed(123)
+miniTrain2 <- sample(nrow(miniTrain),nrow(miniTrain)*.10)
+miniTrain2 <-train[miniTrain2,]
+
+dropAttributes <- c("started_at", "read_at", "date_updated", "date_added")
+
+miniTrain2 <- select(miniTrain2, -dropAttributes)      #dpylr package select() to delete columns by name
+
+#linear Regression Model to determin what predictors are significant. 
+start_time5 <- Sys.time()
+summary(lm(rating~ n_votes + n_comments, data=miniTrain2))
+end_time5 <- Sys.time()
+run_time5 <- end_time5 - start_time5
+```
+The results of our call are rather unsurprising given our bad accuracy results in the previous Random Forest model. While the number of votes ("n_votes") was found to be statistically significant, the number of comments ("n_comments") was not. This could explain a great deal of our accuracy problems. It could also be a point of criticism for the data collection process. Make sure for each review there is not only vote requirement, but also a comment requirement. This could potentially balance out the uneven significance of our values. 
+

@@ -1,0 +1,105 @@
+---
+title: "Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(kernlab)
+library(readr)
+library(caret)
+library(e1071)
+library(tidyverse)
+library(rpart.plot)
+```
+
+```{r}
+require(RWeka)
+require(tidyverse)  # data manipulation
+require(cluster)    # clustering algorithms
+require(factoextra) # clustering algorithms & visualization
+require(gridExtra)  # subfigure layout package
+```
+
+
+```{r}
+gr_train <- read.csv("/Users/gozi/Downloads/goodreads-books-reviews-290312/goodreads_train.csv")
+gr_test<- read.csv("/Users/gozi/Downloads/goodreads-books-reviews-290312/goodreads_test.csv")
+```
+
+## Exploring the data
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+str(gr_train)
+summary(gr_train)
+```
+
+```{r}
+#checking for null values 
+colSums(is.na(gr_train))
+
+#remove the date columns 
+
+gr_train_copy <- gr_train[,-c(6:9)]
+
+```
+
+
+```{r}
+gr_train_copy
+```
+
+
+```{r}
+#exploring the dataset
+hist(gr_train_copy$rating)
+```
+```{r}
+#remove the label
+
+gr_train_unlabeled <- gr_train_copy[,-c(4)]
+head(gr_train_unlabeled)
+```
+
+```{r}
+#breaking up the data set because it is too large
+small_trainset<-sample(nrow(gr_train_copy),nrow(gr_train_copy)*.10)
+
+
+
+
+
+```
+
+```{r}
+model_rweka <- SimpleKMeans (small_trainset, control = Weka_control(N = 7, I=500, S=100))
+model_rweka
+
+```
+
+```{r}
+model_r = kmeans(small_trainset, centers = 7, nstart = 25)
+model_r
+
+```
+
+```{r}
+model_r$centers
+```
+
+```{r}
+cluster_assignment <- data.frame(small_gr_train_copy,model_r$cluster)
+View(cluster_assignment)
+```
+
+```{r}
+fviz_cluster(model_r, data = cluster_assignment)
+```
+
+```{r}
+
+```
+
